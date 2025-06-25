@@ -49,7 +49,7 @@ jobs:
             --sarif-output semgrep.sarif \
             --exclude 'node_modules/**,dist/**,build/**,*.min.js,*.bundle.js' \
             --severity ERROR \
-            --baseline-commit ${{ github.event.before }} \
+            --baseline-commit ${{ github.event.before || 'HEAD~1' }} \
             --timeout 1800 \
             --max-memory 4096
 
