@@ -55,14 +55,14 @@ jobs:
         id: semgrep
         run: |
           semgrep scan \
-            --output-format sarif \
-            --output semgrep.sarif \
+            --sarif \
+            --sarif-output semgrep.sarif \
             --exclude ${{ inputs.exclude-patterns }} \
             --severity ${{ inputs.severity-filter }} \
             --baseline-commit ${{ github.event.before }} \
             --timeout 1800 \
             --max-memory 4096 \
-            --auto-config
+
 
       - name: Upload SARIF results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
