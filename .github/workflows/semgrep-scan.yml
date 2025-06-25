@@ -1,11 +1,11 @@
-name: Reusable Semgrep Scan
+name: Semgrep Scan
 
 # 'workflow_call' permite que este workflow seja chamado por outros.
 on:
   workflow_call:
     inputs:
       semgrep-rules:
-        description: 'O conjunto de regras Semgrep a ser usado'
+        description: 'Análise estática de código com Semgrep'
         required: false
         type: string
         default: 'p/ci'
@@ -42,13 +42,9 @@ jobs:
         with:
           fetch-depth: 0  # Para análise completa do histórico
 
-      - name: Prepare environment (generic)
-        run: |
-          echo "No specific setup required. Semgrep will auto-detect languages and dependencies."
-
       - name: Run Semgrep scan
         id: semgrep
-        uses: semgrep/semgrep-action@v2
+        uses: returntocorp/semgrep-action
         with:
           config: ${{ inputs.semgrep-rules }}
           output-format: sarif
