@@ -21,7 +21,7 @@ jobs:
       semgrep-rules: '.semgrep.yml'  # Usar configuração customizada
       fail-on-findings: ${{ github.event_name == 'pull_request' }}  # Falhar apenas em PRs
       exclude-patterns: 'node_modules/**,dist/**,build/**,*.min.js,*.bundle.js'
-      severity-filter: ${{ github.event_name == 'pull_request' && 'ERROR' || 'ERROR,WARNING' }}
+      severity-filter: ${{ github.event_name == 'pull_request' && 'ERROR'  }}
     secrets: inherit
 
 

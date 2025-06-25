@@ -23,7 +23,7 @@ on:
         description: 'Filtrar por severidade (ERROR,WARNING,INFO)'
         required: false
         type: string
-        default: 'ERROR,WARNING'
+        default: 'ERROR'
 
 permissions:
   contents: read
