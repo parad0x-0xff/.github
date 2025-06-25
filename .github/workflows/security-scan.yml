@@ -15,7 +15,8 @@ concurrency:
 jobs:
   # Scan único com configuração flexível
   semgrep-security:
-    uses: parad0x-0xff/.github/workflows/semgrep-scan.yml@main
+    #uses: parad0x-0xff/.github/workflows/semgrep-scan.yml@main # repositório remoto
+    uses: ./.github/workflows/semgrep-scan.yml@main # repositório local
     with:
       semgrep-rules: '.semgrep.yml'  # Usar configuração customizada
       fail-on-findings: ${{ github.event_name == 'pull_request' }}  # Falhar apenas em PRs
