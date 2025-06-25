@@ -1,0 +1,19 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+# Evita execuções duplicadas simultâneas
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Scan único com configuração flexível
+  semgrep-security:
+    uses: parad0x-0xff/.github/.github/workflows/semgrep-scan.yml@main # repositório remoto
+    #uses: ./.github/workflows/semgrep-scan.yml # repositório local

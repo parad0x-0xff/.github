@@ -10,20 +10,10 @@ on:
         type: string
         default: 'p/ci'
       fail-on-findings:
-        description: 'Falhar se encontrar vulnerabilidades críticas/altas'
+        description: 'Falhar a pipeline'
         required: false
         type: boolean
         default: false
-      exclude-patterns:
-        description: 'Padrões de arquivos/pastas a serem excluídos'
-        required: false
-        type: string
-        default: 'node_modules/**,dist/**,build/**,*.min.js,*.bundle.js'
-      severity-filter:
-        description: 'Filtrar por severidade (ERROR,WARNING,INFO)'
-        required: false
-        type: string
-        default: 'ERROR'
 
 permissions:
   contents: read
@@ -57,11 +47,12 @@ jobs:
           semgrep scan \
             --sarif \
             --sarif-output semgrep.sarif \
-            --exclude ${{ inputs.exclude-patterns }} \
-            --severity ${{ inputs.severity-filter }} \
+            --exclude 'node_modules/**,dist/**,build/**,*.min.js,*.bundle.js' \
+            --severity ERROR \
             --baseline-commit ${{ github.event.before }} \
             --timeout 1800 \
             --max-memory 4096
+            --metrics=off
 
 
       - name: Upload SARIF results to GitHub Security
@@ -77,24 +68,46 @@ jobs:
           if [ -f "semgrep.sarif" ]; then
             echo "## 🔍 Semgrep Security Scan Results" >> $GITHUB_STEP_SUMMARY
             
-            # Contar vulnerabilidades por severidade
-            ERROR_COUNT=$(jq -r '.runs[0].results[] | select(.level == "error") | .rule.id' semgrep.sarif 2>/dev/null | wc -l || echo "0")
-            WARNING_COUNT=$(jq -r '.runs[0].results[] | select(.level == "warning") | .rule.id' semgrep.sarif 2>/dev/null | wc -l || echo "0")
-            INFO_COUNT=$(jq -r '.runs[0].results[] | select(.level == "info") | .rule.id' semgrep.sarif 2>/dev/null | wc -l || echo "0")
+            # Contar vulnerabilidades por severidade usando a estrutura correta do SARIF
+            ERROR_COUNT=$(jq -r '.runs[0].results[] | select(.properties.severity == "ERROR" or .properties.severity == "error" or .properties.severity == "CRITICAL" or .properties.severity == "critical") | .ruleId' semgrep.sarif 2>/dev/null | wc -l || echo "0")
+            WARNING_COUNT=$(jq -r '.runs[0].results[] | select(.properties.severity == "WARNING" or .properties.severity == "warning" or .properties.severity == "MEDIUM" or .properties.severity == "medium") | .ruleId' semgrep.sarif 2>/dev/null | wc -l || echo "0")
+            INFO_COUNT=$(jq -r '.runs[0].results[] | select(.properties.severity == "INFO" or .properties.severity == "info" or .properties.severity == "LOW" or .properties.severity == "low") | .ruleId' semgrep.sarif 2>/dev/null | wc -l || echo "0")
             
-            echo "### 📊 Summary" >> $GITHUB_STEP_SUMMARY
-            echo "- **Critical/High**: $ERROR_COUNT" >> $GITHUB_STEP_SUMMARY
-            echo "- **Medium**: $WARNING_COUNT" >> $GITHUB_STEP_SUMMARY
-            echo "- **Low/Info**: $INFO_COUNT" >> $GITHUB_STEP_SUMMARY
+            # Se não encontrar severidade em properties, tentar contar todos os resultados
+            if [ "$ERROR_COUNT" = "0" ] && [ "$WARNING_COUNT" = "0" ] && [ "$INFO_COUNT" = "0" ]; then
+              TOTAL_RESULTS=$(jq -r '.runs[0].results | length' semgrep.sarif 2>/dev/null || echo "0")
+              echo "### 📊 Summary" >> $GITHUB_STEP_SUMMARY
+              echo "- **Total Findings**: $TOTAL_RESULTS" >> $GITHUB_STEP_SUMMARY
+              echo "- **Note**: Severity levels not available in SARIF output" >> $GITHUB_STEP_SUMMARY
+              
+              # Listar top 5 vulnerabilidades encontradas
+              echo "### 🚨 Top Findings" >> $GITHUB_STEP_SUMMARY
+              jq -r '.runs[0].results[] | "- **" + .ruleId + "**: " + .message.text' semgrep.sarif 2>/dev/null | head -5 >> $GITHUB_STEP_SUMMARY || echo "- No findings" >> $GITHUB_STEP_SUMMARY
+              
+              # Salvar contadores para uso posterior
+              echo "error_count=$TOTAL_RESULTS" >> $GITHUB_OUTPUT
+              echo "warning_count=0" >> $GITHUB_OUTPUT
+              echo "info_count=0" >> $GITHUB_OUTPUT
+            else
+              echo "### 📊 Summary" >> $GITHUB_STEP_SUMMARY
+              echo "- **Critical/High**: $ERROR_COUNT" >> $GITHUB_STEP_SUMMARY
+              echo "- **Medium**: $WARNING_COUNT" >> $GITHUB_STEP_SUMMARY
+              echo "- **Low/Info**: $INFO_COUNT" >> $GITHUB_STEP_SUMMARY
+              
+              # Listar top 5 vulnerabilidades mais críticas
+              echo "### 🚨 Top Critical Findings" >> $GITHUB_STEP_SUMMARY
+              jq -r '.runs[0].results[] | select(.properties.severity == "ERROR" or .properties.severity == "error" or .properties.severity == "CRITICAL" or .properties.severity == "critical") | "- **" + .ruleId + "**: " + .message.text' semgrep.sarif 2>/dev/null | head -5 >> $GITHUB_STEP_SUMMARY || echo "- No critical findings" >> $GITHUB_STEP_SUMMARY
+              
+              # Salvar contadores para uso posterior
+              echo "error_count=$ERROR_COUNT" >> $GITHUB_OUTPUT
+              echo "warning_count=$WARNING_COUNT" >> $GITHUB_OUTPUT
+              echo "info_count=$INFO_COUNT" >> $GITHUB_OUTPUT
+            fi
             
-            # Listar top 5 vulnerabilidades mais críticas
-            echo "### 🚨 Top Critical Findings" >> $GITHUB_STEP_SUMMARY
-            jq -r '.runs[0].results[] | select(.level == "error") | "- **" + .rule.id + "**: " + .message' semgrep.sarif 2>/dev/null | head -5 >> $GITHUB_STEP_SUMMARY || echo "- No critical findings" >> $GITHUB_STEP_SUMMARY
+            # Adicionar informações sobre arquivos analisados
+            echo "### 📁 Files Analyzed" >> $GITHUB_STEP_SUMMARY
+            jq -r '.runs[0].results[] | .locations[0].physicalLocation.artifactLocation.uri' semgrep.sarif 2>/dev/null | sort | uniq | head -10 >> $GITHUB_STEP_SUMMARY || echo "- No file information available" >> $GITHUB_STEP_SUMMARY
             
-            # Salvar contadores para uso posterior
-            echo "error_count=$ERROR_COUNT" >> $GITHUB_OUTPUT
-            echo "warning_count=$WARNING_COUNT" >> $GITHUB_OUTPUT
-            echo "info_count=$INFO_COUNT" >> $GITHUB_OUTPUT
           else
             echo "## ⚠️ No SARIF file found" >> $GITHUB_STEP_SUMMARY
             echo "error_count=0" >> $GITHUB_OUTPUT
@@ -104,13 +117,24 @@ jobs:
         if: always()
 
       - name: Fail on Critical Findings (Optional)
-        if: inputs.fail-on-findings == 'true' && steps.report.outputs.error_count != '0'
+        if: inputs.fail-on-findings == 'true' && (steps.report.outputs.error_count != '0' || steps.report.outputs.warning_count != '0')
         run: |
-          echo "❌ Critical security findings detected! Pipeline will fail."
+          echo "❌ Security findings detected! Pipeline will fail."
           echo "Found ${{ steps.report.outputs.error_count }} critical/high severity issues."
+          echo "Found ${{ steps.report.outputs.warning_count }} medium severity issues."
+          echo "Found ${{ steps.report.outputs.info_count }} low/info severity issues."
           exit 1
 
       - name: Success Message
-        if: steps.report.outputs.error_count == '0' && steps.report.outputs.warning_count == '0'
+        if: steps.report.outputs.error_count == '0' && steps.report.outputs.warning_count == '0' && steps.report.outputs.info_count == '0'
         run: |
-          echo "✅ No security issues found! Code is secure." 
+          echo "✅ No security issues found! Code is secure."
+          
+      - name: Partial Success Message
+        if: (steps.report.outputs.error_count == '0' && steps.report.outputs.warning_count == '0' && steps.report.outputs.info_count != '0') || (steps.report.outputs.error_count == '0' && steps.report.outputs.warning_count != '0')
+        run: |
+          echo "⚠️ Security scan completed with findings:"
+          echo "- Critical/High: ${{ steps.report.outputs.error_count }}"
+          echo "- Medium: ${{ steps.report.outputs.warning_count }}"
+          echo "- Low/Info: ${{ steps.report.outputs.info_count }}"
+          echo "Pipeline continues as fail-on-findings is set to false." 
