@@ -5,9 +5,7 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
-  schedule:
-    # Executar scan diário às 2h da manhã
-    - cron: '0 2 * * *'
+  workflow_dispatch:
 
 # Evita execuções duplicadas simultâneas
 concurrency:
