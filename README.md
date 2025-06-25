@@ -1,6 +1,6 @@
 # 🔒 Security Scan Configuration
 
-Este projeto inclui uma configuração simplificada e robusta de scan de segurança usando Semgrep para detectar vulnerabilidades no código.
+Este projeto inclui uma configuração simplificada de segurança usando Semgrep para detectar vulnerabilidades no código.
 
 ## 📋 Arquivos de Configuração
 
