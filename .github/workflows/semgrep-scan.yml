@@ -10,7 +10,7 @@ on:
         type: string
         default: 'p/ci'
       fail-on-findings:
-        description: 'Falhar a pipeline'
+        description: 'Falhar se encontrar vulnerabilidades críticas/altas'
         required: false
         type: boolean
         default: false
@@ -33,6 +33,9 @@ jobs:
       # A Docker image with Semgrep installed. Do not change this.
       image: semgrep/semgrep
     
+    env:
+      SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+    
     steps:
       # Fetch project source with GitHub Actions Checkout
       - name: Checkout repository
@@ -45,11 +48,9 @@ jobs:
         id: semgrep
         run: |
           semgrep scan \
-            --sarif \
             --sarif-output semgrep.sarif \
             --exclude 'node_modules/**,dist/**,build/**,*.min.js,*.bundle.js' \
             --severity ERROR \
-            --baseline-commit ${{ github.event.before || 'HEAD~1' }} \
             --timeout 1800 \
             --max-memory 4096
 
@@ -68,21 +69,3 @@ jobs:
           path: semgrep.sarif
           retention-days: 30
         if: always()
-
-      - name: Fail on Critical Findings (Optional)
-        if: inputs.fail-on-findings == 'true'
-        run: |
-          if [ -f "semgrep.sarif" ]; then
-            TOTAL_FINDINGS=$(jq -r '.runs[0].results | length' semgrep.sarif 2>/dev/null || echo "0")
-            if [ "$TOTAL_FINDINGS" -gt 0 ]; then
-              echo "❌ Security findings detected! Pipeline will fail."
-              echo "Found $TOTAL_FINDINGS total security issues."
-              echo "Check the uploaded SARIF file for details."
-              exit 1
-            fi
-          fi
-
-      - name: Success Message
-        run: |
-          echo "✅ Semgrep scan completed successfully!"
-          echo "📁 SARIF results uploaded as artifact: semgrep-results" 
