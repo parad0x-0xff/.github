@@ -61,7 +61,7 @@ jobs:
             --severity ${{ inputs.severity-filter }} \
             --baseline-commit ${{ github.event.before }} \
             --timeout 1800 \
-            --max-memory 4096 \
+            --max-memory 4096
 
 
       - name: Upload SARIF results to GitHub Security
