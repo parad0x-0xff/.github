@@ -1,0 +1,39 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Executar scan diário às 2h da manhã
+    - cron: '0 2 * * *'
+
+# Evita execuções duplicadas simultâneas
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Scan único com configuração flexível
+  semgrep-security:
+    uses: parad0x-0xff/.github/workflows/semgrep-scan.yml@main
+    with:
+      semgrep-rules: '.semgrep.yml'  # Usar configuração customizada
+      fail-on-findings: ${{ github.event_name == 'pull_request' }}  # Falhar apenas em PRs
+      exclude-patterns: 'node_modules/**,dist/**,build/**,*.min.js,*.bundle.js'
+      severity-filter: ${{ github.event_name == 'pull_request' && 'ERROR' || 'ERROR,WARNING' }}
+    secrets: inherit
+
+
+  # Opção 3: Scan crítico apenas em PRs
+  #semgrep-critical:
+  #  uses: ./.github/workflows/semgrep-scan.yml
+  #  with:
+  #    semgrep-rules: '.semgrep.yml'  
+  #    fail-on-findings: true  # Falhar se encontrar vulnerabilidades críticas
+  #    exclude-patterns: 'node_modules/**,dist/**,build/**,*.min.js,*.bundle.js'
+  #    severity-filter: 'ERROR'  # Apenas erros críticos
+  #  secrets: inherit
+  #  if: github.event_name == 'pull_request'  
+  

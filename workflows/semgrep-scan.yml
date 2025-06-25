@@ -1,0 +1,112 @@
+name: Reusable Semgrep Scan
+
+# 'workflow_call' permite que este workflow seja chamado por outros.
+on:
+  workflow_call:
+    inputs:
+      semgrep-rules:
+        description: 'O conjunto de regras Semgrep a ser usado'
+        required: false
+        type: string
+        default: 'p/ci'
+      fail-on-findings:
+        description: 'Falhar se encontrar vulnerabilidades críticas/altas'
+        required: false
+        type: boolean
+        default: false
+      exclude-patterns:
+        description: 'Padrões de arquivos/pastas a serem excluídos'
+        required: false
+        type: string
+        default: 'node_modules/**,dist/**,build/**,*.min.js,*.bundle.js'
+      severity-filter:
+        description: 'Filtrar por severidade (ERROR,WARNING,INFO)'
+        required: false
+        type: string
+        default: 'ERROR,WARNING'
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  semgrep:
+    name: Semgrep Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # Timeout para evitar travamentos
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Para análise completa do histórico
+
+      - name: Prepare environment (generic)
+        run: |
+          echo "No specific setup required. Semgrep will auto-detect languages and dependencies."
+
+      - name: Run Semgrep scan
+        id: semgrep
+        uses: semgrep/semgrep-action@v2
+        with:
+          config: ${{ inputs.semgrep-rules }}
+          output-format: sarif
+          output-file: semgrep.sarif
+          exclude: ${{ inputs.exclude-patterns }}
+          severity: ${{ inputs.severity-filter }}
+          baseline-commit: ${{ github.event.before }}
+          timeout: 1800
+          max-memory: 4096
+          auto-config: true
+
+      - name: Upload SARIF results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep-${{ github.event_name }}-${{ github.sha }}
+        if: always()
+
+      - name: Generate Security Report
+        id: report
+        run: |
+          if [ -f "semgrep.sarif" ]; then
+            echo "## 🔍 Semgrep Security Scan Results" >> $GITHUB_STEP_SUMMARY
+            
+            # Contar vulnerabilidades por severidade
+            ERROR_COUNT=$(jq -r '.runs[0].results[] | select(.level == "error") | .rule.id' semgrep.sarif 2>/dev/null | wc -l || echo "0")
+            WARNING_COUNT=$(jq -r '.runs[0].results[] | select(.level == "warning") | .rule.id' semgrep.sarif 2>/dev/null | wc -l || echo "0")
+            INFO_COUNT=$(jq -r '.runs[0].results[] | select(.level == "info") | .rule.id' semgrep.sarif 2>/dev/null | wc -l || echo "0")
+            
+            echo "### 📊 Summary" >> $GITHUB_STEP_SUMMARY
+            echo "- **Critical/High**: $ERROR_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "- **Medium**: $WARNING_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "- **Low/Info**: $INFO_COUNT" >> $GITHUB_STEP_SUMMARY
+            
+            # Listar top 5 vulnerabilidades mais críticas
+            echo "### 🚨 Top Critical Findings" >> $GITHUB_STEP_SUMMARY
+            jq -r '.runs[0].results[] | select(.level == "error") | "- **" + .rule.id + "**: " + .message' semgrep.sarif 2>/dev/null | head -5 >> $GITHUB_STEP_SUMMARY || echo "- No critical findings" >> $GITHUB_STEP_SUMMARY
+            
+            # Salvar contadores para uso posterior
+            echo "error_count=$ERROR_COUNT" >> $GITHUB_OUTPUT
+            echo "warning_count=$WARNING_COUNT" >> $GITHUB_OUTPUT
+            echo "info_count=$INFO_COUNT" >> $GITHUB_OUTPUT
+          else
+            echo "## ⚠️ No SARIF file found" >> $GITHUB_STEP_SUMMARY
+            echo "error_count=0" >> $GITHUB_OUTPUT
+            echo "warning_count=0" >> $GITHUB_OUTPUT
+            echo "info_count=0" >> $GITHUB_OUTPUT
+          fi
+        if: always()
+
+      - name: Fail on Critical Findings (Optional)
+        if: inputs.fail-on-findings == 'true' && steps.report.outputs.error_count != '0'
+        run: |
+          echo "❌ Critical security findings detected! Pipeline will fail."
+          echo "Found ${{ steps.report.outputs.error_count }} critical/high severity issues."
+          exit 1
+
+      - name: Success Message
+        if: steps.report.outputs.error_count == '0' && steps.report.outputs.warning_count == '0'
+        run: |
+          echo "✅ No security issues found! Code is secure." 
