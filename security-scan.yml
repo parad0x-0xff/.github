@@ -15,5 +15,7 @@ concurrency:
 jobs:
   # Scan único com configuração flexível
   semgrep-security:
-    uses: parad0x-0xff/.github/.github/workflows/semgrep-scan.yml@main # repositório remoto
     #uses: ./.github/workflows/semgrep-scan.yml # repositório local
+    uses: parad0x-0xff/.github/.github/workflows/semgrep-scan.yml@main # repositório remoto
+    secrets:
+      SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
