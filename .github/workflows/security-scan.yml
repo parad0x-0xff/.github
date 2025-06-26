@@ -17,6 +17,9 @@ jobs:
   semgrep-security:
     #uses: parad0x-0xff/.github/.github/workflows/semgrep-scan.yml@main # repositório remoto
     uses: ./.github/workflows/semgrep-scan.yml # repositório local
+    secrets:
+      
+      SEMGREP_TOKEN_FROM_CALLER: ${{ secrets.SEMGREP_APP_TOKEN }}
 
 
   # Opção 3: Scan crítico apenas em PRs
