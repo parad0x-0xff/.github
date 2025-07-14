@@ -235,9 +235,9 @@ jobs:
           # Inicia uma thread no Slack
           echo "Enviando mensagem para o Slack..."
           response_json=$(curl -s -X POST https://slack.com/api/chat.postMessage \
-            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
             -H "Content-type: application/json; charset=utf-8" \
-            --data '{"channel":"'$SLACK_CHANNEL'","text":":alert: Alerta de vulnerabilidade :alert:"}')
+            --data '{"channel":"'${{ secrets.SLACK_CHANNEL }}'","text":":alert: Alerta de vulnerabilidade :alert:"}')
           
           echo "Resposta do Slack: $response_json"
           
@@ -253,11 +253,11 @@ jobs:
           payload=$(./generate_slack_payload.sh "$JSON_FILE" "${{ github.server_url }}" "${{ github.repository }}")
           
           # Cria o payload final com channel e thread_ts
-          final_payload=$(echo "$payload" | jq --arg channel "$SLACK_CHANNEL" --arg thread_ts "$thread_ts" '. + {"channel": $channel, "thread_ts": $thread_ts}')
+          final_payload=$(echo "$payload" | jq --arg channel "${{ secrets.SLACK_CHANNEL }}" --arg thread_ts "$thread_ts" '. + {"channel": $channel, "thread_ts": $thread_ts}')
           
           # Envia a mensagem detalhada para a thread do Slack
           echo "$final_payload" | curl -s -X POST https://slack.com/api/chat.postMessage \
-            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
             -H "Content-type: application/json; charset=utf-8" \
             --data @-
         env:
