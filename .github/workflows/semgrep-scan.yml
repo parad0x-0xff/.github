@@ -4,14 +4,22 @@ on:
   workflow_call:
     inputs:
       scan-mode:
-        description: 'Modo de scan: "diff" para PRs ou "full" para a branch principal.'
+        description: 'Modo de scan: "pr" para pull_request, "push" para branch principal.'
         required: true
         type: string
     secrets:
       SEMGREP_APP_TOKEN:
         description: 'Token de App do Semgrep'
         required: true
+      SLACK_BOT_TOKEN:
+        description: 'Token do bot do Slack'
+        required: false
+      SLACK_CHANNEL:
+        description: 'Canal do Slack'
+        required: false
 
+
+# Declara as permissões máximas que este workflow pode precisar
 permissions:
   contents: write
   pull-requests: write
@@ -32,18 +40,19 @@ jobs:
       - name: Install Semgrep
         run: pip install semgrep
 
-      - name: Gather PR Information
+      - name: Gather Information
         id: pr_info
         run: |
           REPO_FULL_NAME="${{ github.repository }}"
           echo "REPO_NAME=${REPO_FULL_NAME##*/}" >> $GITHUB_ENV
           echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
           echo "TIMESTAMP=$(date -u +"%Y-%m-%d")" >> $GITHUB_ENV
-          echo "JSON_FILENAME=semgrep-${REPO_FULL_NAME##*/}-${{ github.event.pull_request.number }}-$(date -u +"%Y-%m-%d").json" >> $GITHUB_ENV
+          echo "JSON_FILENAME=semgrep-${REPO_FULL_NAME##*/}-$(date -u +"%Y-%m-%d").json" >> $GITHUB_ENV
 
-      - name: Run Semgrep on Changed Files
-        if: ${{ inputs.scan-mode == 'diff'}}
-        id: semgrep-diff
+      # Passo 3: O seu passo de scan agora roda diretamente no runner
+      - name: Run Semgrep on Pull Request
+        if: ${{ inputs.scan-mode == 'pr'}}
+        id: semgrep-pr
         run: |
           BASE_BRANCH="origin/${{ github.base_ref }}"
           CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR $BASE_BRANCH...HEAD)
@@ -60,33 +69,206 @@ jobs:
             --timeout 1800 \
             --max-memory 4096 \
             $CHANGED_FILES
-          echo $CHANGED_FILES
 
           # Verifica se o arquivo JSON foi criado e contém resultados
           if [ -f "$JSON_FILENAME" ] && [ $(jq '.results | length' "$JSON_FILENAME") -gt 0 ]; then
             echo "Vulnerabilidades encontradas. Formatando o comentário para o PR..."
+
+            # Conta as vulnerabilidades com severidade crítica alta
+            VULNERABILITIES=$(jq '[.results[] | select(.extra.severity | IN("ERROR", "CRITICAL"))] | length' "$JSON_FILENAME")
             
-            # Conta as vulnerabilidades com severidade alta
-            HIGH_COUNT=$(jq '[.results[].extra | select(.severity == "ERROR")] | length' "$JSON_FILENAME")
-            
-            if [ "$HIGH_COUNT" -ge 1 ]; then
+            if [ "$VULNERABILITIES" -ge 1 ]; then
               SCAN_URL="${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=pr:${{ github.event.pull_request.number }}"
               
-              COMMENT_BODY=$(jq -r --arg SCAN_URL "$SCAN_URL" '"### Alertas de Segurança do Semgrep\n\nEncontramos os seguintes problemas no seu Pull Request:\n\n---\n| Severidade | Regra | Arquivo | Linha |\n| :--- | :--- | :--- | :--- |\n" + ([.results[] | select(.extra.severity == "ERROR")] | map("| `\(.extra.severity)` | `\(.check_id)` | `\(.path)` | `\(.start.line)` |\n> **Mensagem:** \(.extra.message)") | join("\n---\n")) + "\n\n---\n\n[**Ver todos os detalhes no Code Scanning ↗**](\($SCAN_URL))"' "$JSON_FILENAME")
-              echo "$COMMENT_BODY" | gh pr comment $PR_NUMBER --body-file -
-              echo "Comentário postado no PR #$PR_NUMBER."
+              COMMENT_BODY=$( \
+              jq -r --arg SCAN_URL "$SCAN_URL" \
+                '"### 🚨 Alertas de Segurança Críticos (Semgrep)\n\nEncontramos os seguintes problemas que precisam de atenção no seu Pull Request:\n\n" +
+                ([.results[] | select(.extra.severity | IN("ERROR", "CRITICAL"))] | map("<details><summary>🚨 <strong>\(.check_id)</strong></summary>\n\n**Severidade:** `\(.extra.severity)`\n**Arquivo:** `\(.path):\(.start.line)`\n<blockquote><p>Mensagem: \(.extra.message)</p></blockquote>\n\n</details>") | join("\n")) +
+                "\n\n---\n\n[**Ver todos os detalhes no Code Scanning ↗**](\($SCAN_URL))"' "$JSON_FILENAME" )
+
+                echo "$COMMENT_BODY" | gh pr comment $PR_NUMBER --body-file -
+                echo "Comentário postado no PR #$PR_NUMBER."
             fi
           else
             echo "Suas alterações estão **ben seguras**."
           fi
+        continue-on-error: true
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Detect push changed files
+        id: detect_push_changed_files
+        if: ${{ inputs.scan-mode == 'push'}}
+        run: |
+          TARGET_REF="${{ github.event.before }}"
+          HEAD_REF="${{ github.event.after }}"
+
+          echo "Analisando diff do push entre os commits ${TARGET_REF:0:7}...${HEAD_REF:0:7}"
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR $TARGET_REF...$HEAD_REF)
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "Nenhum arquivo modificado para escanear."
+            echo "changed_files=" >> $GITHUB_OUTPUT
+          else
+            echo "Arquivos a serem escaneados:"
+            # Garante que a lista de arquivos seja uma única linha para o próximo passo
+            echo "changed_files=$(echo "$CHANGED_FILES" | tr '\n' ' ')" >> $GITHUB_OUTPUT
+            echo $CHANGED_FILES
+          fi 
+
+      - name: Run Semgrep Push scan
+        if: ${{ steps.detect_push_changed_files.outputs.changed_files != '' }}
+        id: semgrep-push
+        run: |
+          semgrep scan \
+            --sarif-output semgrep.sarif \
+            --json-output "$JSON_FILENAME" \
+            --exclude 'node_modules/**,dist/**,build/**,*.min.js,*.bundle.js' \
+            --timeout 1800 \
+            --max-memory 4096 \
+            ${{ steps.detect_push_changed_files.outputs.changed_files }}
+        continue-on-error: true
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Count, Display, and Check Vulnerabilities
+        id: count_vulns
+        run: |
+          CRITICAL_COUNT=$(jq '[.results[] | select(.extra.severity == "CRITICAL")] | length' "$JSON_FILENAME")
+          HIGH_COUNT=$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' "$JSON_FILENAME")
+          MEDIUM_COUNT=$(jq '[.results[] | select(.extra.severity == "WARNING")] | length' "$JSON_FILENAME")
+          LOW_COUNT=$(jq '[.results[] | select(.extra.severity == "INFO")] | length' "$JSON_FILENAME")
+          echo "CRITICAL_COUNT=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
+          echo "HIGH_COUNT=$HIGH_COUNT" >> $GITHUB_OUTPUT
+          echo "MEDIUM_COUNT=$MEDIUM_COUNT" >> $GITHUB_OUTPUT
+          echo "LOW_COUNT=$LOW_COUNT" >> $GITHUB_OUTPUT
+          echo "Repository: $REPO_NAME"
+          echo "PR Number: $PR_NUMBER"
+          echo "Scan Timestamp: $TIMESTAMP"
+          echo "Vulnerabilidades Críticas: $CRITICAL_COUNT"
+          echo "Vulnerabilidades Altas: $HIGH_COUNT"
+          echo "Vulnerabilidades Médias: $MEDIUM_COUNT"
+          echo "Vulnerabilidades Baixas: $LOW_COUNT"
+
+      - name: Create Slack payload generator
+        run: |
+          cat > generate_slack_payload.sh << 'EOF'
+          #!/bin/bash
+          JSON_FILE="$1"
+          SERVER_URL="$2"
+          REPO="$3"
+          
+          # Cria blocos estruturados do Slack
+          jq -r --arg server_url "$SERVER_URL" --arg repo "$REPO" '
+          {
+            "blocks": (
+              [.results[] | select(.extra.severity | IN("ERROR", "CRITICAL"))] as $issues |
+              [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "🔍 Análise de Segurança - Semgrep"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": ("Encontramos *" + ($issues | length | tostring) + " problemas* críticos/altos na sua alteração que precisam de atenção.")
+                  }
+                },
+                {
+                  "type": "divider"
+                }
+              ] +
+              (
+                $issues | map(
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": ("*" + .extra.severity + "* - `" + .check_id + "`\n📁 `" + .path + "` (linha " + (.start.line | tostring) + ")")
+                    },
+                    "accessory": {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "📋 Ver detalhes"
+                      },
+                      "url": ($server_url + "/" + $repo + "/security/code-scanning?query=%22" + .check_id + "%22+is:open"),
+                      "action_id": ("view_details_" + .check_id)
+                    }
+                  }
+                )
+              )
+            )
+          }' "$JSON_FILE"
+          EOF
+          chmod +x generate_slack_payload.sh
+
+      - name: Slack notification
+        id: slack-notification
+        # Executa apenas se houver vulnerabilidades críticas ou altas
+        if: steps.count_vulns.outputs.CRITICAL_COUNT > 0 || steps.count_vulns.outputs.HIGH_COUNT > 0
+        run: |
+          echo "Enviando notificações para o Slack..."
+
+          JSON_FILE="$JSON_FILENAME"
+
+          # Verifica se o arquivo JSON existe
+          if [ ! -f "$JSON_FILE" ]; then
+            echo "Arquivo JSON não encontrado: $JSON_FILE"
+            exit 1
+          fi
+
+          # Conta problemas críticos e altos
+          ISSUE_COUNT=$(jq '[.results[] | select(.extra.severity | IN("ERROR", "CRITICAL"))] | length' "$JSON_FILE")
+          
+          if [ "$ISSUE_COUNT" -eq 0 ]; then
+            echo "Nenhum problema crítico ou alto encontrado para notificar."
+            exit 0
+          fi
+
+          # Inicia uma thread no Slack
+          echo "Enviando mensagem para o Slack..."
+          response_json=$(curl -s -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Content-type: application/json; charset=utf-8" \
+            --data '{"channel":"'$SLACK_CHANNEL'","text":":alert: Alerta de vulnerabilidade :alert:"}')
+          
+          echo "Resposta do Slack: $response_json"
+          
+          if [ "$(echo "$response_json" | jq -r .ok)" != "true" ]; then
+            echo "❌ Erro ao enviar mensagem: $(echo "$response_json" | jq -r .error)"
+            exit 1
+          fi
+          
+          thread_ts=$(echo "$response_json" | jq -r .ts)
+          echo "✅ Thread do Slack criada: $thread_ts"
+
+          # Gera o payload usando o script shell
+          payload=$(./generate_slack_payload.sh "$JSON_FILE" "${{ github.server_url }}" "${{ github.repository }}")
+          
+          # Cria o payload final com channel e thread_ts
+          final_payload=$(echo "$payload" | jq --arg channel "$SLACK_CHANNEL" --arg thread_ts "$thread_ts" '. + {"channel": $channel, "thread_ts": $thread_ts}')
+          
+          # Envia a mensagem detalhada para a thread do Slack
+          echo "$final_payload" | curl -s -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Content-type: application/json; charset=utf-8" \
+            --data @-
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+
       - name: Run Semgrep Full scan
-        if: ${{ inputs.scan-mode == 'full'}}
+        if: ${{ inputs.scan-mode == 'push'}}
         id: semgrep-full
         run: |
+          rm -f "$JSON_FILENAME"
           semgrep scan \
             --sarif-output semgrep.sarif \
             --json-output "$JSON_FILENAME" \
@@ -96,22 +278,6 @@ jobs:
         continue-on-error: true
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
-
-      - name: Count, Display, and Check Vulnerabilities
-        id: count_vulns
-        run: |
-          HIGH_COUNT=$(jq '[.results[].extra | select(.severity == "ERROR")] | length' "$JSON_FILENAME")
-          MEDIUM_COUNT=$(jq '[.results[].extra | select(.severity == "WARNING")] | length' "$JSON_FILENAME")
-          LOW_COUNT=$(jq '[.results[].extra | select(.severity == "INFO")] | length' "$JSON_FILENAME")
-          echo "HIGH_COUNT=$HIGH_COUNT" >> $GITHUB_ENV
-          echo "MEDIUM_COUNT=$MEDIUM_COUNT" >> $GITHUB_ENV
-          echo "LOW_COUNT=$LOW_COUNT" >> $GITHUB_ENV
-          echo "Repository: $REPO_NAME"
-          echo "PR Number: $PR_NUMBER"
-          echo "Scan Timestamp: $TIMESTAMP"
-          echo "Vulnerabilidades Altas: $HIGH_COUNT"
-          echo "Vulnerabilidades Médias: $MEDIUM_COUNT"
-          echo "Vulnerabilidades Baixas: $LOW_COUNT"
 
       - name: Upload SARIF to Code Scanning
         uses: github/codeql-action/upload-sarif@v3
@@ -124,11 +290,3 @@ jobs:
           name: "${{ env.JSON_FILENAME }}"
           path: "${{ env.JSON_FILENAME }}"
           retention-days: 30
-
-      - name: Pipeline break
-        if: ${{ inputs.scan-mode == 'diff' }}
-        id: pipeline_break
-        run: |
-          if [ "$HIGH_COUNT" -ge 1 ]; then
-            echo "::error::Foram identificadas vulnerabilidades com severidade alta."
-          fi
