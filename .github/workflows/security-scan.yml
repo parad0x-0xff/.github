@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   semgrep-security-scan:
-    uses: ./.github/workflows/semgrep-scan.yml # repositório local
+    uses: parad0x-0xff/.github/.github/workflows/semgrep-scan.yml@main # repositório remoto
     with:
       scan-mode: ${{ github.event_name == 'pull_request' && 'pr' || 'push' }}
     secrets:
