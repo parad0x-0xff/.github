@@ -16,7 +16,4 @@ jobs:
     uses: parad0x-0xff/.github/.github/workflows/semgrep-scan.yml@main # repositório remoto
     with:
       scan-mode: ${{ github.event_name == 'pull_request' && 'pr' || 'push' }}
-    secrets:
-      SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
-      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-      SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+    secrets: inherit
